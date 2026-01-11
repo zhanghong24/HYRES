@@ -1,0 +1,78 @@
+{
+  "inflow": {
+    "mach": 6.0,
+    "alpha": 0.0,
+    "sideslip": 0.0,
+    "reynolds": 3755.0,
+    "T_wall": 300.0,
+    "height": -17.0,
+    "T_ref": 73.17,
+    "P_ref": -26436.0,
+    "rho_ref": 8.819e-4,
+    "V_ref": -3449.33734,
+    "ndim": 3
+  },
+  "force_ref": {
+    "is_full_field": 1,
+    "area_ref": 1.0,
+    "len_ref_Re": 1.0,
+    "len_ref_grid": 1.0,
+    "point_ref": [0.0, 0.0, 0.0]
+  },
+  "filenames": {
+    "grid": "grid_64proc_out.x",
+    "bc": "grid_64proc_out.inp",
+    "output_dir": "result"
+  },
+  "control": {
+    "start_mode": 0,
+    "max_steps": 100,
+    "save_interval": 100,
+    "force_interval": 1000,
+    "residual_interval": 1
+  },
+  "time_step": {
+    "mode": 0,
+    "cfl": 1.0,
+    "dt_nondim": 0.18,
+    "dt_growth_rate": 1.1,
+    "dt_dts": 0.01,
+    "max_substeps": 10,
+    "substep_tol": 0.01
+  },
+  "physics": {
+    "viscous_mode": 1,
+    "chemistry_mode": 0,
+    "thermo_model": 1
+  },
+  "scheme": {
+    "lhs_method": 21,
+    "scheme_id": 41,
+    "flux_id": 3,
+    "limiter_id": 1,
+    "entropy_fix": 0.1,
+    "visc_spectral_radius": 1.0,
+    "residual_smoothing": 0
+  },
+  "interpolation": {
+    "xk": -1.00,
+    "xb": 1.00,
+    "visc_k2": 0.80,
+    "visc_k4": 0.05
+  },
+  "chemistry": {
+    "gas_model": "air",
+    "source_method": 0,
+    "radiation_model": 0
+  },
+  "boundary_features": {
+    "gcl": 1,
+    "cic": [0, 0, 0, 0, 0]
+  },
+  "connectivity": {
+    "read_mode": 0,
+    "file": "conect.dat",
+    "order": 0,
+    "dist_tol": 2.5
+  }
+}

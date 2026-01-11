@@ -1,0 +1,26 @@
+# --- CFD 结果文件 (必须屏蔽，体积巨大) ---
+run/ns/blunt/result/
+*.vts
+*.vtm
+*.vtu
+*.plt
+*.dat
+
+# --- 编译与二进制文件 ---
+build/
+bin/
+*.o
+*.exe
+*.a
+*.lib
+
+# --- 文档与临时文件 ---
+*.pdf
+*.log
+.DS_Store
+Thumbs.db
+
+# --- Hugo 自动生成的缓存 ---
+public/
+resources/_gen/
+.hugo_build.lock

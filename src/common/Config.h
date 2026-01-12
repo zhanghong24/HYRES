@@ -43,7 +43,7 @@ struct ControlConfig {
 };
 
 struct TimeStepConfig {
-    int mode;           // ntmst
+    int mode;           // 0 = lusgs, 1 = red-black lusgs, 2 = TVD Runge-Kutta
     real_t cfl;         // cfl
     real_t dt_nondim;   // timedt
     real_t dt_rate;     // timedt_rate

@@ -91,27 +91,41 @@ void NsKernel::solve_gauss_seidel_single(Block* b) {
     std::vector<real_t> rhs_nb(ni * nj * nk * nl);
 
     // 2. 备份当前显式残差 (Backup Explicit RHS)
-    // 对应 Fortran: call store_rhs_nb
     store_rhs_nb(b, rhs_nb);
 
-    // 3. LU-SGS 预处理 (Predictor Step)
-    // 对应 Fortran: call lusgs_l / lusgs_u
-    // 第三个参数 0.0 在 Fortran 中传入，这里保持一致
-    lusgs_l(b, rhs_nb, wmig, beta, 0.0);
-    lusgs_u(b, rhs_nb, wmig, beta, 0.0);
+    // standard lusgs
+    if (config_->timeStep.mode == 0 ) {
+        // 3. LU-SGS 预处理 (Predictor Step)
+        lusgs_l(b, rhs_nb, wmig, beta, 0.0);
+        lusgs_u(b, rhs_nb, wmig, beta, 0.0);
 
-    // 4. Gauss-Seidel 点松弛 (Corrector Step)
-    // 对应 Fortran: call gs_pr_l / gs_pr_u
-    gs_pr_l(b, rhs_nb, wmig, beta);
-    gs_pr_u(b, rhs_nb, wmig, beta);
+        // 4. Gauss-Seidel 点松弛 (Corrector Step)
+        gs_pr_l(b, rhs_nb, wmig, beta);
+        gs_pr_u(b, rhs_nb, wmig, beta);
+    }
 
-    // 5. 释放内存
-    // std::vector rhs_nb 会在函数结束时自动释放，无需手动 deallocate
+    // red-black lusgs
+    if (config_->timeStep.mode == 1 ) {
+        // 1. 初始化猜测值 Delta Q = 0
+        // 因为我们解的是线性方程组 (D+L+U) * dQ = RHS
+        // rhs_nb 里存的是 RHS (常数项)，b->dq 里存的是未知数 dQ
+        // 初始时假设增量为 0 是安全的
+        //b->dq.fill(0.0); 
+
+        // 2. 迭代循环 (通常 2-4 次足以匹敌标准 LU-SGS)
+        int max_sweeps = 4; 
+        for (int iter = 0; iter < max_sweeps; ++iter) {
+            
+            // Phase 1: 更新所有红点
+            // 利用旧的黑点值 + 原始 RHS，算出新的红点值
+            lusgs_rb_sweep(b, rhs_nb, wmig, beta, 0 /*RED*/);
+
+            // Phase 2: 更新所有黑点
+            // 利用新的红点值 + 原始 RHS，算出新的黑点值
+            lusgs_rb_sweep(b, rhs_nb, wmig, beta, 1 /*BLACK*/);
+        }
+    }
 }
-
-// =========================================================================
-// 隐式求解子函数 (占位符)
-// =========================================================================
 
 // =========================================================================
 // 备份显式残差 (Backup Explicit RHS)
@@ -253,7 +267,6 @@ void NsKernel::matrix_vector_product_std(
 
 // =========================================================================
 // LU-SGS 下三角扫描 (Forward Sweep)
-// 对应 Fortran: subroutine lusgs_l
 // =========================================================================
 void NsKernel::lusgs_l(Block* b, const std::vector<real_t>& rhs_nb, 
                            real_t wmig, real_t beta, real_t extra_param) 
@@ -264,7 +277,7 @@ void NsKernel::lusgs_l(Block* b, const std::vector<real_t>& rhs_nb,
     int ng = b->ng;
     int nl = 5;
     real_t gamma = GlobalData::getInstance().gamma;
-    int nvis = config_->physics.viscous_mode; // 假设 >0 表示有粘性
+    int nvis = config_->physics.viscous_mode; 
 
     std::vector<real_t> rhs0(nl);
     std::vector<real_t> prim_i(nl), prim_j(nl), prim_k(nl);
@@ -286,7 +299,7 @@ void NsKernel::lusgs_l(Block* b, const std::vector<real_t>& rhs_nb,
     // 辅助 lambda: 获取 Coed (对角项系数)
     auto get_coed = [&](int i, int j, int k, std::vector<real_t>& c_out) {
         int I = i - 1 + ng; int J = j - 1 + ng; int K = k - 1 + ng;
-        // 假设 Block 类有 sra, srb, src, dtdt 数组
+
         real_t ra = b->sra(I, J, K);
         real_t rb = b->srb(I, J, K);
         real_t rc = b->src(I, J, K);
@@ -314,7 +327,6 @@ void NsKernel::lusgs_l(Block* b, const std::vector<real_t>& rhs_nb,
                 get_coed(i, j, k, coed);
 
                 // 2. 获取邻居 dq (i-1, j-1, k-1)
-                // 注意：Fortran i-1 对应 C++ I-1
                 for (int m = 0; m < nl; ++m) {
                     dq_i[m] = b->dq(I-1, J, K, m);
                     dq_j[m] = b->dq(I, J-1, K, m);
@@ -337,11 +349,8 @@ void NsKernel::lusgs_l(Block* b, const std::vector<real_t>& rhs_nb,
                 get_metrics_at(b, i, j, k-1, 0, 0, 1, nx, ny, nz, nt);
                 gykb_k[0]=nx; gykb_k[1]=ny; gykb_k[2]=nz; gykb_k[3]=nt;
 
-                // 5. 获取谱半径 (ra, rb, rc) - 邻居的
-                // Fortran getrarbrc(..., -1) -> i-1, j, k / i, j-1, k ...
-                // 简化处理：直接取邻居的 sra/srb/src
-                // 这里需要注意 Fortran getrarbrc 中的 i_mml = max(i-1, 1) 逻辑
-                // 我们直接读取 clamp 后的索引
+                // 5. 获取谱半径 (ra, rb, rc) - 邻居的谱半径
+                // 直接读取 clamp 后的索引
                 int Im = std::max(0, i-2) + ng; // i-1 in Fortran -> max(1, i-1) -> C++
                 int Jm = std::max(0, j-2) + ng;
                 int Km = std::max(0, k-2) + ng;
@@ -508,7 +517,6 @@ void NsKernel::lusgs_u(Block* b, const std::vector<real_t>& rhs_nb,
 
 // =========================================================================
 // Gauss-Seidel 下三角松弛 (Lower Relaxation)
-// 对应 Fortran: subroutine gs_pr_l
 // =========================================================================
 void NsKernel::gs_pr_l(Block* b, const std::vector<real_t>& rhs_nb, real_t wmig, real_t beta) {
     int ni = b->ni;
@@ -742,4 +750,201 @@ void NsKernel::gs_pr_u(Block* b, const std::vector<real_t>& rhs_nb, real_t wmig,
     }
 }
 
+void NsKernel::lusgs_rb_sweep(Block* b, const std::vector<real_t>& rhs_nb, 
+                              real_t wmig, real_t beta, int color) {
+
+    // 1. 基础常量与维度获取
+    int ni = b->ni; int nj = b->nj; int nk = b->nk;
+    int ng = b->ng; int nl = 5;
+    real_t gamma = GlobalData::getInstance().gamma;
+    int nvis = config_->physics.viscous_mode;
+
+    // 2. 线程局部临时变量 (Thread-Local Storage)
+    std::vector<real_t> coed(nl);
+    std::vector<real_t> dq_n(nl); // neighbor dq
+    std::vector<real_t> flux_n(nl); // neighbor flux contribution
+
+    // 用于存储当前点的度量和原始变量，以及邻居的度量和原始变量
+    std::vector<real_t> prim_self(nl), prim_n(nl); 
+    std::vector<real_t> metric_n(4); // nx, ny, nz, nt
+
+    // 累计所有邻居影响的临时变量
+    std::vector<real_t> total_flux_diff(nl, 0.0);
+
+    // 3. Lambda: 获取 Primitive 变量 (复用自 Implicit_TimeAdvance.cpp)
+    auto get_prim = [&](int i, int j, int k, std::vector<real_t>& p_out) {
+        int I = i - 1 + ng; int J = j - 1 + ng; int K = k - 1 + ng;
+        p_out[0] = b->r(I, J, K); p_out[1] = b->u(I, J, K); p_out[2] = b->v(I, J, K);
+        p_out[3] = b->w(I, J, K); p_out[4] = b->p(I, J, K);
+    };
+
+    // 4. Lambda: 获取对角项系数 (复用自 lusgs_l)
+    auto get_coed = [&](int i, int j, int k, std::vector<real_t>& c_out) {
+        int I = i - 1 + ng; int J = j - 1 + ng; int K = k - 1 + ng;
+        real_t rad_ns = b->sra(I, J, K) + b->srb(I, J, K) + b->src(I, J, K);
+        if (nvis > 0) rad_ns += b->srva(I, J, K) + b->srvb(I, J, K) + b->srvc(I, J, K);
+        
+        real_t ct = 1.0 / b->dtdt(I, J, K);
+        real_t ccc = 1.0 / (ct + beta * wmig * rad_ns);
+        for(int m=0; m<nl; ++m) c_out[m] = ccc;
+    };
+
+    // 5. 红黑并行循环 (Parallel Loop Structure)
+    for (int k = 1; k <= nk; ++k) {
+        for (int j = 1; j <= nj; ++j) {
+            for (int i = 1; i <= ni; ++i) {
+                // 【逻辑 1】红黑过滤器 (Red-Black Filter)
+                // i, j, k 是 Fortran 风格的 1-based 逻辑索引
+                // 如果 (i+j+k) 的奇偶性与当前 color (0 或 1) 不符，直接跳过
+                if ((i + j + k) % 2 != color) continue;
+
+                // 【逻辑 2】计算真实的内存索引 (Physical Index)
+                // 对应公式：从逻辑索引映射到带 Ghost 的实际数组索引
+                int I = i - 1 + ng;
+                int J = j - 1 + ng;
+                int K = k - 1 + ng;
+
+                // 【逻辑 3】准备计算参数
+                // 3.1 获取当前点的对角项系数 (D的逆)
+                // 这个 lambda 在函数开头已经定义好了
+                get_coed(i, j, k, coed);
+
+                // 3.2 重置累加器
+                // total_flux_diff 用于累加 6 个邻居传来的所有通量影响
+                // 在处理每个点之前，必须清零
+                std::fill(total_flux_diff.begin(), total_flux_diff.end(), 0.0);
+
+                // 【逻辑 4】定义 6 个邻居方向 (Look-up Table)
+                // 结构：{di, dj, dk, dir_idx, npn}
+                // dir_idx: 1=I方向, 2=J方向, 3=K方向 (用于选择 metric 和谱半径)
+                // npn: 1 (上游 A+, 波从邻居传给我), -1 (下游 A-, 波从我传给邻居/反传)
+                struct NeighborInfo { int di; int dj; int dk; int dir_idx; int npn; };
+                const NeighborInfo neighbors[] = {
+                    {-1,  0,  0,  1,  1}, // Left   (i-1), A+
+                    { 1,  0,  0,  1, -1}, // Right  (i+1), A-
+                    { 0, -1,  0,  2,  1}, // Bottom (j-1), B+
+                    { 0,  1,  0,  2, -1}, // Top    (j+1), B-
+                    { 0,  0, -1,  3,  1}, // Back   (k-1), C+
+                    { 0,  0,  1,  3, -1}  // Front  (k+1), C-
+                };
+
+                // 【逻辑 5】遍历所有邻居
+                for (const auto& nb : neighbors) {
+                    
+                    // 5.1 计算邻居的逻辑索引 (1-based)
+                    int ni_nb = i + nb.di;
+                    int nj_nb = j + nb.dj;
+                    int nk_nb = k + nb.dk;
+
+                    // 5.2 计算邻居的真实内存索引 (0-based with Ghost)
+                    int I_nb = ni_nb - 1 + ng;
+                    int J_nb = nj_nb - 1 + ng;
+                    int K_nb = nk_nb - 1 + ng;
+
+                    // 【逻辑 6】数据收集 (Data Gathering)
+                    
+                    // 6.1 读取邻居的 Delta Q (关键！)
+                    // 在红黑算法中，无论邻居是红是黑，是新是旧，直接从内存 b->dq 读取。
+                    // 越界检查交给 Block 内部逻辑，或者假设 Ghost 层已正确同步/置零。
+                    for (int m = 0; m < nl; ++m) {
+                        dq_n[m] = b->dq(I_nb, J_nb, K_nb, m);
+                    }
+
+                    // 6.2 读取邻居的物理状态 (Primitive Variables)
+                    // 用于计算通量雅可比矩阵
+                    get_prim(ni_nb, nj_nb, nk_nb, prim_n);
+
+                    // 6.3 获取界面度量 (Metrics)
+                    // 规则：直接使用邻居位置的 Metrics。
+                    // 比如左邻居(i-1)，我们取 (i-1) 处的 metric，代表 i-1/2 界面。
+                    // 右邻居(i+1)，我们取 (i+1) 处的 metric，代表 i+1/2 界面。
+                    real_t nx, ny, nz, nt;
+                    int dir_i = (nb.dir_idx == 1);
+                    int dir_j = (nb.dir_idx == 2);
+                    int dir_k = (nb.dir_idx == 3);
+                    get_metrics_at(b, ni_nb, nj_nb, nk_nb, dir_i, dir_j, dir_k, nx, ny, nz, nt);
+                    metric_n[0] = nx; metric_n[1] = ny; metric_n[2] = nz; metric_n[3] = nt;
+
+                    // 6.4 获取谱半径 (Spectral Radius)
+                    // 同样直接去邻居位置取对应的 sra/srb/src
+                    real_t rad = 0.0;
+                    if      (nb.dir_idx == 1) rad = b->sra(I_nb, J_nb, K_nb);
+                    else if (nb.dir_idx == 2) rad = b->srb(I_nb, J_nb, K_nb);
+                    else if (nb.dir_idx == 3) rad = b->src(I_nb, J_nb, K_nb);
+
+                    // 【逻辑 7】核心计算：通量分裂 (Flux Splitting)
+                    // 调用 matrix_vector_product_std 计算 A+ * dq 或 A- * dq
+                    // 结果存入临时变量 flux_n
+                    // 参数说明：
+                    // prim_n.data(): 邻居的原始变量
+                    // metric_n.data(): 界面几何信息
+                    // dq_n.data(): 邻居的增量
+                    // flux_n.data(): 输出结果
+                    // rad: 邻居处的谱半径
+                    // nb.npn: 特征值偏移方向 (1=上游, -1=下游)
+                    // gamma: 比热比
+                    matrix_vector_product_std(prim_n.data(), metric_n.data(), dq_n.data(), 
+                                              flux_n.data(), rad, nb.npn, gamma);
+
+                    // 【逻辑 8】累加影响 (Accumulate Flux Difference)
+                    // 根据标准 Gauss-Seidel 迭代公式 (参考您原有的 gs_pr_l)：
+                    // Total_Impact = (A+ * dq_L) + (B+ * dq_B) + ... - (A- * dq_R) - ...
+                    // 也就是说：
+                    // 上游项 (npn = 1) : 符号为正 (+)
+                    // 下游项 (npn = -1): 符号为负 (-)
+                    
+                    if (nb.npn == 1) {
+                         for(int m=0; m<nl; ++m) total_flux_diff[m] += flux_n[m];
+                    } else {
+                         for(int m=0; m<nl; ++m) total_flux_diff[m] -= flux_n[m];
+                    }
+                }
+
+                // 【逻辑 9】处理粘性项 (Viscous Terms)
+                // 仅当物理模型包含粘性时执行
+                // 逻辑复刻：上游 (npn=1) 加粘性贡献，下游 (npn=-1) 减粘性贡献
+                if (nvis > 0) {
+                    for (const auto& nb : neighbors) {
+                        // 9.1 计算邻居坐标
+                        int ni_nb = i + nb.di; int nj_nb = j + nb.dj; int nk_nb = k + nb.dk;
+                        int I_nb = ni_nb - 1 + ng; int J_nb = nj_nb - 1 + ng; int K_nb = nk_nb - 1 + ng;
+
+                        // 9.2 读取邻居处的粘性谱半径 (Viscous Spectral Radius)
+                        real_t visc_coeff = 0.0;
+                        if      (nb.dir_idx == 1) visc_coeff = b->srva(I_nb, J_nb, K_nb);
+                        else if (nb.dir_idx == 2) visc_coeff = b->srvb(I_nb, J_nb, K_nb);
+                        else if (nb.dir_idx == 3) visc_coeff = b->srvc(I_nb, J_nb, K_nb);
+
+                        // 9.3 读取邻居 dq (需重新读取或复用)
+                        for(int m=0; m<nl; ++m) dq_n[m] = b->dq(I_nb, J_nb, K_nb, m);
+
+                        // 9.4 累加粘性贡献
+                        // 公式：contribution = 0.5 * visc_coeff * dq
+                        // 注意符号：上游加，下游减
+                        if (nb.npn == 1) { 
+                            for(int m=0; m<nl; ++m) total_flux_diff[m] += 0.5 * visc_coeff * dq_n[m];
+                        } else {          
+                            for(int m=0; m<nl; ++m) total_flux_diff[m] -= 0.5 * visc_coeff * dq_n[m];
+                        }
+                    }
+                }
+
+                // 【逻辑 10】最终更新 (Final Update)
+                // 计算 rhs_nb 的线性索引 (用于读取原始显式残差 R)
+                // rhs_nb layout: [k][j][i][m] (0-based flat index, no ghost)
+                // idx = ((k-1)*nj*ni + (j-1)*ni + (i-1)) * 5
+                // 使用 size_t 防止大网格溢出
+                size_t idx_rhs = ((size_t)(k-1) * nj * ni + (size_t)(j-1) * ni + (size_t)(i-1)) * 5;
+
+                // 核心更新公式：
+                // Delta Q = (邻居总影响 - 原始显式残差) * 对角逆矩阵
+                // dq = (wmig * total_flux - R) / D
+                for (int m = 0; m < nl; ++m) {
+                    real_t rhs_val = wmig * total_flux_diff[m];
+                    b->dq(I, J, K, m) = (rhs_val - rhs_nb[idx_rhs + m]) * coed[m];
+                }
+            }
+        }
+    }
+}
 }

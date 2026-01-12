@@ -112,6 +112,7 @@ private:
     void matrix_vector_product_std(const real_t* prim, const real_t* metrics, const real_t* dq, 
                                    real_t* f_out, real_t rad, int npn, real_t gamma);
     void update_conservatives(Block* b);
+    void lusgs_rb_sweep(Block* b, const std::vector<real_t>& rhs_nb, real_t wmig, real_t beta, int color);
     // ========================================================
     // 边界条件处理函数
     // ========================================================

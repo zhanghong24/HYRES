@@ -26,13 +26,13 @@
   },
   "control": {
     "start_mode": 0,
-    "max_steps": 100,
-    "save_interval": 100,
+    "max_steps": 1000,
+    "save_interval": 500,
     "force_interval": 1000,
     "residual_interval": 1
   },
   "time_step": {
-    "mode": 0,
+    "mode": 1,
     "cfl": 1.0,
     "dt_nondim": 0.18,
     "dt_growth_rate": 1.1,

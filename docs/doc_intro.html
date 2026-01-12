@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HYRES Solver Documentation</title>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --accent-color: #3498db;
+            --secondary-accent: #e67e22;
+            --text-color: #333;
+            --bg-color: #f4f4f4;
+            --code-bg: #f8f9fa;
+            --sidebar-width: 280px;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            margin: 0;
+            display: flex;
+        }
+
+        /* 侧边栏导航 */
+        .sidebar {
+            width: var(--sidebar-width);
+            background-color: var(--primary-color);
+            color: white;
+            height: 100vh;
+            position: fixed;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            border-right: 1px solid #1a252f;
+        }
+
+        .sidebar h1 {
+            font-size: 22px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 10px;
+            text-align: center;
+        }
+
+        .sidebar ul { list-style: none; padding: 0; }
+        .sidebar li { margin-bottom: 10px; }
+        
+        .sidebar a {
+            color: #ecf0f1;
+            text-decoration: none;
+            display: block;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .sidebar a:hover { background-color: rgba(255,255,255,0.1); padding-left: 15px; }
+        .sidebar a.active { background-color: var(--accent-color); font-weight: bold; }
+        
+        /* 子菜单缩进 */
+        .sidebar .submenu { margin-left: 15px; font-size: 0.9em; border-left: 1px solid #555; }
+        .sidebar .submenu a { padding: 5px 10px; color: #bdc3c7; }
+
+        /* 主内容区 */
+        .content {
+            margin-left: var(--sidebar-width);
+            padding: 40px 60px;
+            max-width: 1000px;
+            background-color: white;
+            min-height: 100vh;
+            width: 100%;
+        }
+
+        /* 标题样式 */
+        h1.main-title { border-bottom: 4px solid var(--accent-color); padding-bottom: 15px; margin-bottom: 40px; color: var(--primary-color); }
+        
+        section { margin-bottom: 60px; scroll-margin-top: 20px; }
+
+        h2 { 
+            margin-top: 40px; 
+            border-left: 5px solid var(--accent-color); 
+            padding-left: 15px; 
+            color: var(--primary-color);
+            background: linear-gradient(to right, #f9f9f9, #fff);
+            padding-top: 5px; padding-bottom: 5px;
+        }
+
+        h3 { margin-top: 30px; font-weight: 600; color: #555; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+
+        p { margin-bottom: 15px; text-align: justify; }
+
+        /* 代码与函数签名 */
+        .func-sig {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background-color: #eef1f6;
+            padding: 12px;
+            border-radius: 6px;
+            border-left: 4px solid var(--secondary-accent);
+            color: #2c3e50;
+            font-size: 0.9em;
+            overflow-x: auto;
+            margin: 15px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        code {
+            background-color: var(--code-bg);
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: 'Consolas', monospace;
+            color: #c0392b;
+            border: 1px solid #e1e1e8;
+        }
+
+        /* 步骤列表 */
+        .step-list { counter-reset: step; list-style: none; padding: 0; }
+        .step-list li { position: relative; padding-left: 45px; margin-bottom: 25px; }
+        .step-list li::before {
+            content: counter(step);
+            counter-increment: step;
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 32px;
+            height: 32px;
+            background-color: var(--primary-color);
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 32px;
+            font-weight: bold;
+            font-size: 14px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        /* 表格 */
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: var(--primary-color); color: white; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+
+        /* 架构图容器 */
+        .architecture-diagram {
+            border: 2px dashed #bdc3c7;
+            background: #fafafa;
+            padding: 20px;
+            text-align: center;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+
+        .note {
+            background-color: #fff8e1;
+            border-left: 5px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h1>HYRES Solver</h1>
+        <ul>
+            <li><a href="#intro">1. 项目概况</a></li>
+            <li><a href="#arch">2. 软件架构</a></li>
+            <li><a href="#governing">3. 控制方程</a></li>
+            <li>
+                <a href="#pre">4. 前处理 (Pre-process)</a>
+                <div class="submenu">
+                    <a href="#pre-io">4.1 网格读取与分发</a>
+                    <a href="#pre-topo">4.2 拓扑分析</a>
+                    <a href="#pre-mem">4.3 内存分配</a>
+                    <a href="#pre-metrics">4.4 几何度量 (GCL)</a>
+                    <a href="#pre-init">4.5 物理场初始化</a>
+                </div>
+            </li>
+            <li><a href="#spatial" style="opacity: 0.5;">5. 空间离散 [待更]</a></li>
+            <li><a href="#time" style="opacity: 0.5;">6. 时间推进 [待更]</a></li>
+            <li><a href="#post" style="opacity: 0.5;">7. 后处理 [待更]</a></li>
+        </ul>
+    </div>
+
+    <div class="content">
+        <h1 class="main-title">HYRES: Hypersonic Resolution Solver</h1>
+
+        <section id="intro">
+            <h2>1. 项目概况 (Introduction)</h2>
+            <p>
+                <strong>HYRES</strong> 是一个面向高性能计算（HPC）架构设计的三维多块结构网格计算流体力学（CFD）求解器。
+                该项目旨在解决复杂外形的高超声速流动问题，重点关注高精度激波捕捉、高效隐式时间推进以及跨平台（CPU/GPU）的可扩展性。
+            </p>
+
+            <h3>主要特性</h3>
+            <ul>
+                <li><strong>多块结构网格</strong>：利用结构网格的数据局部性优势优化访存效率。</li>
+                <li><strong>MPI 并行计算</strong>：基于区域分解（Domain Decomposition）的大规模并行能力。</li>
+                <li><strong>高阶数值格式</strong>：WCNS 重构 + Roe/HLLC 通量。</li>
+                <li><strong>隐式时间推进</strong>：LU-SGS 方法，突破显式时间步长限制。</li>
+                <li><strong>Driver-Kernel 架构</strong>：控制流与计算流分离，原生支持异构加速（CUDA）。</li>
+            </ul>
+        </section>
+
+        <section id="arch">
+            <h2>2. 软件架构 (Software Architecture)</h2>
+            <p>
+                HYRES 采用了 <strong>Driver-Kernel 分离</strong> 的设计模式。这种设计确保了求解器的控制流（IO、通信、调度）与计算密集型的物理流（通量、源项）解耦。
+            </p>
+
+            <div class="architecture-diagram">
+                <h3>System Architecture Diagram</h3>
+                <svg width="600" height="280" viewBox="0 0 600 280">
+                    <rect x="50" y="20" width="500" height="60" rx="5" fill="#ecf0f1" stroke="#2c3e50" stroke-width="2"/>
+                    <text x="300" y="55" text-anchor="middle" font-weight="bold" fill="#2c3e50" font-size="18">SolverDriver (控制层)</text>
+                    
+                    <path d="M 300 80 L 300 120" stroke="#2c3e50" stroke-width="2" marker-end="url(#arrow)"/>
+
+                    <rect x="150" y="100" width="300" height="40" rx="5" fill="#3498db" stroke="none"/>
+                    <text x="300" y="125" text-anchor="middle" fill="white" font-size="14">Template Interface (Kernel API)</text>
+
+                    <rect x="50" y="160" width="500" height="100" rx="5" fill="#e8f6f3" stroke="#16a085" stroke-width="2"/>
+                    <text x="300" y="190" text-anchor="middle" font-weight="bold" fill="#16a085" font-size="18">Physics Kernel (计算层)</text>
+                    
+                    <rect x="80" y="210" width="100" height="30" rx="3" fill="white" stroke="#16a085"/>
+                    <text x="130" y="230" text-anchor="middle" font-size="12">NsKernel</text>
+
+                    <rect x="250" y="210" width="100" height="30" rx="3" fill="white" stroke="#16a085" stroke-dasharray="4"/>
+                    <text x="300" y="230" text-anchor="middle" font-size="12">RansKernel</text>
+                    
+                    <rect x="420" y="210" width="100" height="30" rx="3" fill="white" stroke="#16a085" stroke-dasharray="4"/>
+                    <text x="470" y="230" text-anchor="middle" font-size="12">NemoKernel</text>
+                </svg>
+            </div>
+        </section>
+
+        <section id="governing">
+            <h2>3. 控制方程 (Governing Equations)</h2>
+            <p>
+                HYRES 主要求解三维一般曲线坐标系下的非定常可压缩 Navier-Stokes 方程。
+            </p>
+            <div class="note">
+                <strong>矢量形式：</strong>
+                $$ \frac{\partial \mathbf{Q}}{\partial t} + \frac{\partial (\mathbf{E} - \mathbf{E}_v)}{\partial \xi} + \frac{\partial (\mathbf{F} - \mathbf{F}_v)}{\partial \eta} + \frac{\partial (\mathbf{G} - \mathbf{G}_v)}{\partial \zeta} = \mathbf{S} $$
+            </div>
+            <ul>
+                <li>\( \mathbf{Q} = [\rho, \rho u, \rho v, \rho w, E]^T \) 为守恒变量。</li>
+                <li>\( \xi, \eta, \zeta \) 为计算空间的曲线坐标。</li>
+                <li>\( \mathbf{E}, \mathbf{F}, \mathbf{G} \) 为无粘通量 (Inviscid Flux)。</li>
+                <li>\( \mathbf{E}_v, \mathbf{F}_v, \mathbf{G}_v \) 为粘性通量 (Viscous Flux)。</li>
+            </ul>
+        </section>
+
+        <section id="pre">
+            <h2>4. 前处理 (Pre-processing)</h2>
+            <p>
+                前处理模块由 <code>SimulationLoader</code> 类主导，负责从磁盘读取网格与边界条件文件、建立 MPI 通信拓扑、分配计算内存以及初始化物理场。
+                整个流程在 <code>SimulationLoader::load</code> 函数中顺序执行。
+            </p>
+
+            <h3 id="pre-io">4.1 网格与边界读取 (IO & Distribution)</h3>
+            <p>采用 <strong>Master-Slave</strong> 模式：Rank 0 负责读取所有文件，然后分发给各计算进程。</p>
+
+            <ul class="step-list">
+                <li>
+                    <strong>读取 Plot3D 网格</strong>
+                    <div class="func-sig">void read_plot3d_grid(..., string filename, int ng)</div>
+                    <p>
+                        Rank 0 读取二进制 Plot3D 文件。读取顺序为：<code>nblocks</code> -> <code>ni, nj, nk</code> -> <code>x, y, z</code>。
+                        此时所有 <code>Block</code> 对象仅存在于 Rank 0 的内存中。
+                    </p>
+                </li>
+                <li>
+                    <strong>读取并行 BC 文件</strong>
+                    <div class="func-sig">void read_bc_parallel(..., string filename, mpi)</div>
+                    <p>
+                        Rank 0 读取边界条件拓扑文件。该文件定义了每个 Block 的 Owner Rank 以及边界 Patch 的原始范围 (<code>raw_is, raw_ie</code>)。
+                        对于对接边界 (Type < 0)，还包含目标块 ID (<code>target_block</code>) 和目标范围。
+                    </p>
+                </li>
+                <li>
+                    <strong>MPI 网格分发</strong>
+                    <div class="func-sig">void distribute_grid(..., mpi, ng)</div>
+                    <p>
+                        Rank 0 通过 <code>MPI_Send</code> 将网格坐标数据分发给对应的 Owner Rank。
+                        非 Owner 进程（Slave）通过 <code>MPI_Recv</code> 接收数据并填充本地 Block。
+                        <br>
+                        <em>注：非本地 Block 会保留“空壳 (Shell)”对象，用于后续拓扑分析，但不存储网格数据。</em>
+                    </p>
+                </li>
+            </ul>
+
+            <h3 id="pre-topo">4.2 拓扑分析 (Topology Analysis)</h3>
+            <p>每个进程都需要知道全局的连接关系，以便建立通信模式。</p>
+
+            <ul class="step-list">
+                <li>
+                    <strong>边界广播与补全</strong>
+                    <div class="func-sig">void distribute_bc(...)</div>
+                    <p>
+                        通过 <code>MPI_Bcast</code> 将所有 Block 的 <code>BoundaryPatch</code> 信息广播给所有进程。
+                        确保所有进程拥有完全一致的拓扑图。
+                    </p>
+                </li>
+                <li>
+                    <strong>连接关系解析</strong>
+                    <div class="func-sig">void analyze_bc_connect(BoundaryPatch& patch, ...)</div>
+                    <p>
+                        针对对接边界 (Type < 0)，计算源面 (Source) 到目标面 (Target) 的映射关系。
+                        核心是通过对比 <code>raw_is/ie</code> 和 <code>raw_target_is/ie</code> 计算出 3x3 旋转矩阵 <code>dir_matrix</code>。
+                        <br>
+                        生成映射表：<code>image, jmage, kmage</code>，存储目标块的绝对索引。
+                    </p>
+                </li>
+                <li>
+                    <strong>多点奇异性处理 (Singularity)</strong>
+                    <div class="func-sig">void build_nppos_list_ex(...)</div>
+                    <p>
+                        使用 <strong>并查集 (Union-Find)</strong> 算法识别多块对接产生的奇异点（即同一个物理点被 >2 个 Block 共享）。
+                        为这些点组 (Group) 分配全局唯一的通信缓冲区索引，用于后续的平均化处理。
+                    </p>
+                </li>
+            </ul>
+
+            <h3 id="pre-mem">4.3 内存分配 (Allocation)</h3>
+            <p>仅为 <strong>本地所属 (Local Owner)</strong> 的 Block 分配计算内存。</p>
+
+            <table>
+                <tr>
+                    <th>变量名</th>
+                    <th>描述</th>
+                    <th>维度 (ni, nj, nk, ...)</th>
+                </tr>
+                <tr>
+                    <td><code>q, dq</code></td>
+                    <td>守恒变量与增量</td>
+                    <td>(ni, nj, nk, 5) - SoA Layout</td>
+                </tr>
+                <tr>
+                    <td><code>r, u, v, w, p, t</code></td>
+                    <td>原始变量</td>
+                    <td>(ni, nj, nk)</td>
+                </tr>
+                <tr>
+                    <td><code>vol</code></td>
+                    <td>网格单元体积</td>
+                    <td>(ni, nj, nk)</td>
+                </tr>
+                <tr>
+                    <td><code>kcx...ctt</code></td>
+                    <td>坐标变换度量</td>
+                    <td>(ni, nj, nk)</td>
+                </tr>
+                <tr>
+                    <td><code>bc_flags</code></td>
+                    <td>边界标记数组 (6个面)</td>
+                    <td>Mask Array</td>
+                </tr>
+            </table>
+
+            <h3 id="pre-metrics">4.4 几何度量计算 (GCL Metrics)</h3>
+            <p>
+                在计算空间 $(\xi, \eta, \zeta)$ 计算网格导数。采用满足 <strong>几何守恒律 (GCL)</strong> 的有限差分方法。
+            </p>
+            <div class="func-sig">void compute_metrics_gcl(Block* b)</div>
+
+            <p>计算流程：</p>
+            <ol>
+                <li>
+                    <strong>计算 Jacobian 导数：</strong> 使用 4 阶中心差分计算 $x_\xi, y_\xi, z_\xi$ 等 9 个分量。
+                    $$ (\frac{\partial x}{\partial \xi})_{i,j,k} \approx \text{FiniteDiff}(x) $$
+                </li>
+                <li>
+                    <strong>计算守恒度量：</strong> 通过叉乘组合计算面法向量（如 $\nabla \xi / J$）。
+                    $$ \vec{S}^\xi = \vec{r}_\eta \times \vec{r}_\zeta $$
+                </li>
+                <li>
+                    <strong>体积计算：</strong>
+                    $$ Vol = x_\xi S^\xi_x + x_\eta S^\eta_x + x_\zeta S^\zeta_x $$
+                </li>
+                <li>
+                    <strong>负体积检查：</strong> <code>check_grid_derivative</code> 检查并修正 $Vol < 0$ 的单元。
+                </li>
+            </ol>
+
+            <h3 id="pre-init">4.5 物理场初始化 (Physics Initialization)</h3>
+            <p>根据 <code>Config</code> 配置初始化流场参数。</p>
+
+            <ul class="step-list">
+                <li>
+                    <strong>来流参数计算</strong>
+                    <div class="func-sig">PhysicsInitializer::init_inflow(...)</div>
+                    <p>
+                        根据高度 (Height) 计算标准大气参数 ($P_\infty, T_\infty, \rho_\infty$)。
+                        计算无量纲参数：雷诺数 $Re$, 马赫数 $Ma$, 参考粘性系数 $\mu_{ref}$ (Sutherland 公式)。
+                    </p>
+                </li>
+                <li>
+                    <strong>原始变量填充</strong>
+                    <div class="func-sig">void init_nstart0(...)</div>
+                    <p>
+                        对于 Start Mode = 0 (Uniform Start)：
+                        全场填充自由来流条件：$\rho=1.0, P=P_\infty, \vec{V}=\vec{V}_\infty$。
+                    </p>
+                </li>
+                <li>
+                    <strong>温度场计算</strong>
+                    <div class="func-sig">void initialize_temperature(...)</div>
+                    <p>
+                        根据状态方程计算温度分布：
+                        $$ T = M_\infty^2 \cdot \gamma \frac{P}{\rho} $$
+                    </p>
+                </li>
+            </ul>
+
+        </section>
+        
+        <div style="text-align: center; color: #999; margin-top: 80px; font-size: 0.9em;">
+            HYRES Documentation &copy; 2025
+        </div>
+    </div>
+</body>
+</html>

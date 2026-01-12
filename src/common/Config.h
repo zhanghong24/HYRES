@@ -53,6 +53,7 @@ struct TimeStepConfig {
 };
 
 struct PhysicsConfig {
+    int model_mode;     // model (0 = Euler/NS, 1 = RANS, 2 = NEMO.)
     int viscous_mode;   // nvis (0=Euler, 1=NS)
     int chemistry_mode; // nchem
     int thermo_model;   // ntmodel

@@ -41,6 +41,7 @@
     "substep_tol": 0.01
   },
   "physics": {
+    "model_mode": 0,
     "viscous_mode": 1,
     "chemistry_mode": 0,
     "thermo_model": 1

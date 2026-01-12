@@ -78,6 +78,7 @@ void Config::load(const std::string& filename, bool verbose) {
 
     // 6. Physics
     auto& j_phy = j["physics"];
+    physics.model_mode     = j_phy.value("model_mode", 0);
     physics.viscous_mode   = j_phy.value("viscous_mode", 1);
     physics.chemistry_mode = j_phy.value("chemistry_mode", 0);
     physics.thermo_model   = j_phy.value("thermo_model", 1);

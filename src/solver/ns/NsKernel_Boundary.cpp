@@ -1,13 +1,6 @@
-#include "solver/BoundaryManager.h"
-#include "spdlog/spdlog.h" 
-#include <cmath>
-#include <iostream>
+#include "NSKernel.h"
 
 namespace Hyres {
-
-// 构造函数
-BoundaryManager::BoundaryManager(const Config* config, const std::vector<Block*>& blocks)
-    : config_(config), blocks_(blocks) {}
 
 // =========================================================================
 // 辅助函数：计算单位法向量 (对应 getnxyz_mml)
@@ -58,8 +51,7 @@ static void get_unit_normal(real_t& nx, real_t& ny, real_t& nz,
 // =========================================================================
 // 序列处理：按优先级顺序执行边界
 // =========================================================================
-void BoundaryManager::boundary_sequence(Block* b) {
-    // 严格按照 preprocess 中 set_bc_index 确定的顺序执行
+void NsKernel::BoundaryManager::boundary_sequence(Block* b) {
     for (int nr : b->bc_execution_order) {
         BoundaryPatch& patch = b->boundaries[nr];
         if (patch.type < 0) {
@@ -88,17 +80,15 @@ void BoundaryManager::boundary_sequence(Block* b) {
 }
 
 // =========================================================================
-// 辅助函数：差分格式的边界平均修正 (对应 dif_average)
+// 辅助函数：差分格式的边界平均修正
 // =========================================================================
-void BoundaryManager::dif_average(Block* b, const BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::dif_average(Block* b, const BoundaryPatch& patch) {
     int idir = patch.s_nd; // 0=I, 1=J, 2=K
     int inrout = patch.s_lr; // -1 or 1
 
     int ng = b->ng;
     
     // 获取循环范围 (0-based)
-    // raw_is 是 Fortran 的 1-based, 且可能带符号
-    // 我们需要的是物理边界的绝对范围
     int ist = std::abs(patch.raw_is[0]); int ied = std::abs(patch.raw_ie[0]);
     int jst = std::abs(patch.raw_is[1]); int jed = std::abs(patch.raw_ie[1]);
     int kst = std::abs(patch.raw_is[2]); int ked = std::abs(patch.raw_ie[2]);
@@ -145,7 +135,7 @@ void BoundaryManager::dif_average(Block* b, const BoundaryPatch& patch) {
 // =========================================================================
 // 物理边界：无粘壁面 (Slip Wall / Euler Wall)
 // =========================================================================
-void BoundaryManager::boundary_inviscid_wall(Block* b, const BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_inviscid_wall(Block* b, const BoundaryPatch& patch) {
     int idir = patch.s_nd; // 0, 1, 2
     int inrout = patch.s_lr; // -1, 1
 
@@ -225,13 +215,10 @@ void BoundaryManager::boundary_inviscid_wall(Block* b, const BoundaryPatch& patc
 }
 
 // =========================================================================
-// 物理边界：粘性壁面 (No-Slip Wall) - 最终版
+// 物理边界：粘性壁面 (No-Slip Wall) 
 // 支持：绝热 (Adiabatic) / 等温 (Isothermal) + 鲁棒性限幅
 // =========================================================================
-// =========================================================================
-// 物理边界：粘性壁面 (No-Slip Wall) - 修正版 (Strict Fortran Match)
-// =========================================================================
-void BoundaryManager::boundary_viscid_wall(Block* b, const BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_viscid_wall(Block* b, const BoundaryPatch& patch) {
     // 1. 获取全局单例数据和配置
     const auto& global = GlobalData::getInstance();
     real_t mach  = global.mach;
@@ -351,7 +338,7 @@ void BoundaryManager::boundary_viscid_wall(Block* b, const BoundaryPatch& patch)
 // 物理边界：对称边界 (Symmetry)
 // 逻辑：计算边界面中心点的法向量，应用于全场进行镜像反射
 // =========================================================================
-void BoundaryManager::boundary_symmetry(Block* b, const BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_symmetry(Block* b, const BoundaryPatch& patch) {
     // 1. 几何方向准备
     int idir = patch.s_nd;   // 0=I, 1=J, 2=K
     int inrout = patch.s_lr; // -1, 1
@@ -445,7 +432,7 @@ void BoundaryManager::boundary_symmetry(Block* b, const BoundaryPatch& patch) {
 // =========================================================================
 // 物理边界：远场 (Farfield) - 基于黎曼不变量 (Riemann Invariants)
 // =========================================================================
-void BoundaryManager::boundary_farfield(Block* b, const BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_farfield(Block* b, const BoundaryPatch& patch) {
     const auto& global = GlobalData::getInstance();
     
     // --- 1. 获取自由来流参数 (Free Stream / Infinity) ---
@@ -617,7 +604,7 @@ void BoundaryManager::boundary_farfield(Block* b, const BoundaryPatch& patch) {
 // 物理边界：自由流/强迫入口 (Freestream / Inflow)
 // 逻辑：强制设为无穷远来流参数
 // =========================================================================
-void BoundaryManager::boundary_freestream(Block* b, const BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_freestream(Block* b, const BoundaryPatch& patch) {
     const auto& global = GlobalData::getInstance();
 
     // 1. 获取全局来流参数
@@ -681,7 +668,7 @@ void BoundaryManager::boundary_freestream(Block* b, const BoundaryPatch& patch) 
 // 物理边界：超声速出口 / 零阶外推 (Supersonic Outflow / Zero-Order Extrapolation)
 // 逻辑：Ghost = Face = Inner (直接复制最近的内部点)
 // =========================================================================
-void BoundaryManager::boundary_outflow(Block* b, const BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_outflow(Block* b, const BoundaryPatch& patch) {
     // 1. 几何方向准备
     int idir = patch.s_nd;   
     int inrout = patch.s_lr; 
@@ -746,7 +733,7 @@ void BoundaryManager::boundary_outflow(Block* b, const BoundaryPatch& patch) {
     }
 }
 
-void BoundaryManager::boundary_n1_vir3_parallel(Block* b, BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_n1_vir3_parallel(Block* b, BoundaryPatch& patch) {
     int nbt_id = patch.target_block;
     int id_src = b->owner_rank;
     int id_des = blocks_[nbt_id]->owner_rank;
@@ -759,9 +746,9 @@ void BoundaryManager::boundary_n1_vir3_parallel(Block* b, BoundaryPatch& patch) 
 }
 
 // =========================================================================
-// 核心逻辑 1：本地拷贝 (boundary_n1_vir3) - 100% 复刻
+// 核心逻辑 1：本地拷贝
 // =========================================================================
-void BoundaryManager::boundary_n1_vir3(Block* b, BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_n1_vir3(Block* b, BoundaryPatch& patch) {
     int nbt_id = patch.target_block;
     Block* b_target = blocks_[nbt_id];
 
@@ -838,9 +825,9 @@ void BoundaryManager::boundary_n1_vir3(Block* b, BoundaryPatch& patch) {
 }
 
 // =========================================================================
-// 核心逻辑 2：远程解包 (boundary_n1_vir3_other) - 100% 复刻
+// 核心逻辑 2：远程解包
 // =========================================================================
-void BoundaryManager::boundary_n1_vir3_other(Block* b, BoundaryPatch& patch) {
+void NsKernel::BoundaryManager::boundary_n1_vir3_other(Block* b, BoundaryPatch& patch) {
     int idir = patch.s_nd;
     int inrout = patch.s_lr;
 

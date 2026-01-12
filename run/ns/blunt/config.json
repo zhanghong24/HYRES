@@ -26,10 +26,10 @@
   },
   "control": {
     "start_mode": 0,
-    "max_steps": 1000,
+    "max_steps": 100,
     "save_interval": 500,
-    "force_interval": 1000,
-    "residual_interval": 1
+    "force_interval": 10,
+    "residual_interval": 10
   },
   "time_step": {
     "mode": 1,

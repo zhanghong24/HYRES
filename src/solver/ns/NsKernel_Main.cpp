@@ -12,7 +12,7 @@ void NsKernel::check_residual(int step) {
     int rank = mpi_.get_rank();
     const int nl = 5;
     
-    // 配置参数 (对应 Fortran m1 = 1 + method)
+    // 配置参数
     const int m1 = 2; 
 
     // 本地统计变量
@@ -149,6 +149,196 @@ void NsKernel::check_residual(int step) {
         // 单行输出数据
         spdlog::info("{:8d}  {:14.6E}  {:14.6E}  {}", 
                      step, rms_residual, global_max_res.val, loc_str);
+    }
+}
+
+// =========================================================================
+// 核心函数：计算气动力系数 (纯文件输出版)
+// =========================================================================
+void NsKernel::calculate_aerodynamic_forces(int step) {
+    
+    AeroCoeffs local_sum;
+    
+    // 1. 获取参考压力
+    real_t p_ref = config_->inflow.P_ref; 
+    if (p_ref <= 0.0) p_ref = 1.0 / GlobalData::getInstance().gamma;
+
+    // 2. 本地积分
+    for (auto* b : blocks_) {
+        if (b && b->owner_rank == mpi_.get_rank()) {
+            integrate_wall_forces(b, local_sum, p_ref);
+        }
+    }
+
+    // 3. MPI 规约
+    std::vector<double> send_buf = {
+        (double)local_sum.Fx, (double)local_sum.Fy, (double)local_sum.Fz,
+        (double)local_sum.Mx, (double)local_sum.My, (double)local_sum.Mz
+    };
+    std::vector<double> recv_buf(6, 0.0);
+
+    MPI_Reduce(send_buf.data(), recv_buf.data(), 6, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    // 4. Rank 0 输出到文件
+    if (mpi_.get_rank() == 0) {
+        real_t cfx = recv_buf[0];
+        real_t cfy = recv_buf[1];
+        real_t cfz = recv_buf[2];
+        real_t cmx = recv_buf[3];
+        real_t cmy = recv_buf[4];
+        real_t cmz = recv_buf[5];
+
+        // --- 系数归一化 ---
+        real_t sref = config_->forceRef.area_ref;
+        real_t lref = config_->forceRef.len_ref_grid;
+        // 半模/全模系数
+        real_t sym_factor = 2.0 - (real_t)config_->forceRef.is_full_field;
+
+        real_t scf = sym_factor / sref;
+        real_t vcm = sym_factor / (sref * lref);
+
+        cfx *= scf; cfy *= scf; cfz *= scf;
+        cmx *= vcm; cmy *= vcm; cmz *= vcm;
+
+        // --- 坐标轴转换 ---
+        real_t alpha_rad = config_->inflow.alpha * M_PI / 180.0;
+        real_t beta_rad  = config_->inflow.sideslip * M_PI / 180.0; 
+
+        real_t sina = std::sin(alpha_rad);
+        real_t cosa = std::cos(alpha_rad);
+        real_t sinb = std::sin(beta_rad);
+        real_t cosb = std::cos(beta_rad);
+
+        // CL, CD (假设 Y 轴为升力方向)
+        real_t cl = cfy * cosa - cfx * sina;
+        real_t cd = cosb * (cfy * sina + cfx * cosa) + sinb * cfz;
+
+        // 压心 Xcp
+        real_t small = 1.0e-30;
+        real_t xcp = ((cfy >= 0) ? 1.0 : -1.0) * cmz / (std::abs(cfy) + small);
+
+        // --- 文件输出核心逻辑 ---
+        std::string filename = "history_force.dat";
+        std::ofstream out;
+
+        // 模式选择：如果是第0步，覆盖重写；否则追加
+        // 注意：如果是 Restart 模式，这里可能需要改成始终 Append，根据您的 nstart 判断
+        // 这里暂时用 step==0 判断
+        if (step == 0) {
+            out.open(filename, std::ios::out); // 覆盖模式
+            // 写 Tecplot 风格表头
+            out << "VARIABLES = \"Step\", \"Cfx\", \"Cfy\", \"Cfz\", \"Cmx\", \"Cmy\", \"Cmz\", \"CD\", \"CL\", \"Xcp\"\n";
+        } else {
+            out.open(filename, std::ios::app); // 追加模式
+        }
+        
+        if (out.is_open()) {
+            out << std::scientific << std::setprecision(6);
+            out << std::setw(8)  << step 
+                << std::setw(16) << cfx
+                << std::setw(16) << cfy
+                << std::setw(16) << cfz
+                << std::setw(16) << cmx
+                << std::setw(16) << cmy
+                << std::setw(16) << cmz
+                << std::setw(16) << cd
+                << std::setw(16) << cl
+                << std::setw(16) << xcp
+                << "\n";
+            out.close();
+        }
+    }
+}
+
+// =========================================================================
+// 辅助函数：壁面积分 (完全修正版)
+// =========================================================================
+void NsKernel::integrate_wall_forces(Block* b, AeroCoeffs& sum, real_t p_ref) {
+    int ng = b->ng;
+    
+    // --- 修正 Config 引用 ---
+    real_t xref = config_->forceRef.point_ref[0];
+    real_t yref = config_->forceRef.point_ref[1];
+    real_t zref = config_->forceRef.point_ref[2];
+    
+    int nvis = config_->physics.viscous_mode; 
+    
+    // 雷诺数引用
+    real_t re_inv = 1.0;
+    if (config_->inflow.reynolds > 1.0) {
+        re_inv = 1.0 / config_->inflow.reynolds;
+    }
+
+    for (const auto& patch : b->boundaries) {
+        // 【核心修正】直接使用整数 2 判断壁面 (匹配您的 NsKernel_Boundary.cpp)
+        if (patch.type != 2) continue;
+
+        int dim = patch.s_nd; 
+        int dir = patch.s_lr; 
+        
+        // 获取循环范围
+        int is = patch.raw_is[0]; int ie = patch.raw_ie[0];
+        int js = patch.raw_is[1]; int je = patch.raw_ie[1];
+        int ks = patch.raw_is[2]; int ke = patch.raw_ie[2];
+
+        int i_start = std::min(is, ie); int i_end = std::max(is, ie);
+        int j_start = std::min(js, je); int j_end = std::max(js, je);
+        int k_start = std::min(ks, ke); int k_end = std::max(ks, ke);
+
+        for (int k = k_start; k <= k_end; ++k) {
+            for (int j = j_start; j <= j_end; ++j) {
+                for (int i = i_start; i <= i_end; ++i) {
+                    
+                    int I = i - 1 + ng;
+                    int J = j - 1 + ng;
+                    int K = k - 1 + ng;
+
+                    // 获取 Metrics (面法向面积矢量)
+                    real_t Sx, Sy, Sz;
+                    if (dim == 0) {
+                        Sx = b->kcx(I, J, K); Sy = b->kcy(I, J, K); Sz = b->kcz(I, J, K);
+                    } else if (dim == 1) {
+                        Sx = b->etx(I, J, K); Sy = b->ety(I, J, K); Sz = b->etz(I, J, K);
+                    } else {
+                        Sx = b->ctx(I, J, K); Sy = b->cty(I, J, K); Sz = b->ctz(I, J, K);
+                    }
+
+                    // 修正方向: 确保法向指向流体内部还是外部？
+                    // Fortran: pnx = s_lr * nx * pn. 
+                    // 我们直接乘上 dir (s_lr)
+                    real_t dir_f = (real_t)dir; 
+                    Sx *= dir_f; Sy *= dir_f; Sz *= dir_f;
+
+                    // 压力系数: 2.0 * (p - p_inf)
+                    real_t p_wall = b->p(I, J, K);
+                    real_t pn = 2.0 * (p_wall - p_ref);
+
+                    real_t dfx = pn * Sx;
+                    real_t dfy = pn * Sy;
+                    real_t dfz = pn * Sz;
+
+                    // 粘性部分 (仅当是粘性计算时)
+                    // 您在 NsKernel_Boundary.cpp 里区分了 inviscid/viscid wall
+                    // 这里我们根据全局物理配置 nvis 判断即可
+                    if (nvis > 0) {
+                        // [占位] 如果有梯度变量，在此处添加计算
+                        // 需要计算 tau_xx 等并投影到 (Sx, Sy, Sz)
+                    }
+
+                    sum.Fx += dfx;
+                    sum.Fy += dfy;
+                    sum.Fz += dfz;
+
+                    real_t x = b->x(I, J, K) - xref;
+                    real_t y = b->y(I, J, K) - yref;
+                    real_t z = b->z(I, J, K) - zref;
+
+                    sum.Mx += (y * dfz - z * dfy);
+                    sum.My += (z * dfx - x * dfz);
+                    sum.Mz += (x * dfy - y * dfx);
+                }
+            }
+        }
     }
 }
 
@@ -422,6 +612,119 @@ void NsKernel::output_solution(int step_idx) {
         } else {
             spdlog::error(">>> Error: GlobalData.n_blocks is 0. VTM not written.");
         }
+    }
+}
+
+// =========================================================================
+// Restart 输出函数：保存原始量 r, u, v, w, p, t
+// 文件名格式: restart_flow_{step}.dat
+// =========================================================================
+void NsKernel::output_restart(int step) {
+    int rank = mpi_.get_rank();
+    int nblocks = blocks_.size();
+
+    // 1. 生成文件名
+    std::string filename = fmt::format("restart_flow.dat");
+
+    std::ofstream out;
+    if (rank == 0) {
+        out.open(filename, std::ios::binary | std::ios::out);
+        if (!out.is_open()) {
+            spdlog::error("Failed to open restart file: {}", filename);
+            return;
+        }
+        
+        // 2. 写入文件头 (Header)
+        // 包含: 步数, 块数, 物理时间 (可选), 甚至可以存个 Magic Number
+        out.write(reinterpret_cast<const char*>(&step), sizeof(int));
+        out.write(reinterpret_cast<const char*>(&nblocks), sizeof(int));
+        
+        // 如果有物理时间，也可以写进去，方便非定常续算
+        // double time = ...;
+        // out.write((char*)&time, sizeof(double));
+        
+        spdlog::info(">>> Writing Restart File: {}", filename);
+    }
+
+    // 3. 逐块写入 (按 ID 顺序)
+    for (int nb = 0; nb < nblocks; ++nb) {
+        Block* b = blocks_[nb];
+        
+        // 获取该块的基本信息 (所有进程都知道这些 Meta 信息)
+        int ni = b->ni;
+        int nj = b->nj;
+        int nk = b->nk;
+        int ng = b->ng;
+        int owner = b->owner_rank;
+
+        size_t num_cells = (size_t)ni * nj * nk;
+        int n_vars = 6; // r, u, v, w, p, t
+        
+        // 准备发送/接收缓冲区 (仅物理网格大小)
+        // 结构: [r...][u...][v...][w...][p...][t...] 
+        // 也可以是 Point-wise AOQ: [r,u,v,w,p,t]... 这里为了压缩可能选择分开存，
+        // 但为了简单和读写一致，建议按变量块存储 (Plot3D 风格) 或者 纯平铺。
+        // 这里采用: Point-wise (SOA or AOS). 
+        // 为了方便 SimulationLoader::read_plot3d_grid 的习惯，我们采用 SOA (Variable-Fastest 这种说法有歧义)，
+        // 即: 先存所有的 r, 再存所有的 u ... 这样比较符合 Fortran 数组习惯。
+        
+        std::vector<double> buffer;
+        
+        // --- 数据打包 (Packing) ---
+        // 只有 Owner 需要打包数据
+        if (rank == owner) {
+            buffer.resize(num_cells * n_vars);
+            size_t idx = 0;
+            
+            // 辅助 Lambda: 提取单个变量的纯物理区域
+            auto pack_var = [&](const HyresArray<double>& var) {
+                for (int k = 0; k < nk; ++k) {
+                    for (int j = 0; j < nj; ++j) {
+                        for (int i = 0; i < ni; ++i) {
+                            // 注意: 加上 ng 偏移
+                            buffer[idx++] = var(i + ng, j + ng, k + ng);
+                        }
+                    }
+                }
+            };
+
+            // 依次打包 6 个变量
+            pack_var(b->r);
+            pack_var(b->u);
+            pack_var(b->v);
+            pack_var(b->w);
+            pack_var(b->p);
+            pack_var(b->t);
+        }
+
+        // --- 数据传输与写入 ---
+        
+        if (rank == 0) {
+            if (owner == 0) {
+                // 本地块：直接写
+                out.write(reinterpret_cast<const char*>(buffer.data()), buffer.size() * sizeof(double));
+            } else {
+                // 远程块：接收后写
+                // 需要重新分配 buffer 大小以接收数据
+                std::vector<double> recv_buf(num_cells * n_vars);
+                MPI_Recv(recv_buf.data(), num_cells * n_vars, MPI_DOUBLE, owner, nb, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                out.write(reinterpret_cast<const char*>(recv_buf.data()), recv_buf.size() * sizeof(double));
+            }
+        } else {
+            if (owner == rank) {
+                // 发送给 Rank 0
+                // Tag 使用 block id (nb) 以防混淆
+                MPI_Send(buffer.data(), buffer.size(), MPI_DOUBLE, 0, nb, MPI_COMM_WORLD);
+            }
+        }
+        
+        // 简单的同步，防止 IO 拥塞 (可选)
+        // MPI_Barrier(MPI_COMM_WORLD); 
+    }
+
+    if (rank == 0) {
+        out.close();
+        spdlog::info("    Restart file written successfully.");
     }
 }
 

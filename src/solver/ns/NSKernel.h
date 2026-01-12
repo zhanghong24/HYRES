@@ -44,10 +44,27 @@ public:
     // 5. 残差检查与打印
     void check_residual(int step);
 
-    // 6. 输出模块
+    // 6. 气动力监测
+    void calculate_aerodynamic_forces(int step);
+
+    // 7. 输出模块
     void output_solution(int step);
 
+    // 8. 重启动输出模块
+    void output_restart(int step);
+
 private:
+
+    // ========================================================
+    // 气动力计算
+    // ========================================================
+
+    struct AeroCoeffs {
+        real_t Fx = 0.0, Fy = 0.0, Fz = 0.0;
+        real_t Mx = 0.0, My = 0.0, Mz = 0.0;
+    };
+
+    void integrate_wall_forces(Block* b, AeroCoeffs& sum, real_t p_inf);
     
     // ========================================================
     // 状态更新与准备

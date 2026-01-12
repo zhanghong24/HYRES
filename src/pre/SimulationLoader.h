@@ -79,6 +79,10 @@ private:
 
     static void init_nstart0(std::vector<Block*>& blocks, const MpiContext& mpi);
 
+    static void init_nstart1(std::vector<Block*>& blocks, const MpiContext& mpi);
+    
+    static void unpack_block_data(Block* b, const std::vector<double>& buffer);
+
     static void initialize_temperature(std::vector<Block*>& blocks, const Config* config, const MpiContext& mpi);
 
     static void build_nppos_list_ex(std::vector<Block*>& blocks, const MpiContext& mpi);

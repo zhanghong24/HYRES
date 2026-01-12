@@ -31,8 +31,10 @@ public:
             spdlog::info(">>> Solver Started. Max Steps: {}", max_steps_);
         }
 
+        int step;
+
         // 主时间步循环 (Main Loop)
-        for (int step = current_step_ + 1; step <= max_steps_; ++step) {
+        for (step = current_step_ + 1; step <= max_steps_; ++step) {
             
             // 1. 执行单步时间推进 (RK3, LU-SGS, etc.)
             run_time_step(step);
@@ -42,11 +44,18 @@ public:
                 kernel_.check_residual(step);
             }
 
-            // 3. I/O 输出 (Result Saving)
+            // 3. 气动力计算 (Force Calculation)
+            if (step % config_->control.force_interval == 0) {
+                kernel_.calculate_aerodynamic_forces(step);
+            }
+
+            // 4. I/O 输出 (Result Saving)
             if (step % config_->control.save_interval == 0) {
                 kernel_.output_solution(step);
             }
         }
+
+        kernel_.output_restart(step);
 
         if (mpi_.is_root()) {
             spdlog::info(">>> Solver Finished Successfully.");

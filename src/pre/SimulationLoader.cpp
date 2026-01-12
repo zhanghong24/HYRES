@@ -1435,11 +1435,7 @@ void SimulationLoader::initialization(std::vector<Block*>& blocks, const Config*
     if (nstart == 0) {
         init_nstart0(blocks, mpi);
     } else {
-        // [TODO] Restart mode (nstart=1)
-        // 先用占位符，后续再实现 init_nstart1
-        if (mpi.is_root()) {
-            spdlog::warn(">>> [TODO] Restart mode (nstart={}) not implemented yet.", nstart);
-        }
+        init_nstart1(blocks, mpi);
     }
 }
 
@@ -1482,6 +1478,170 @@ void SimulationLoader::init_nstart0(std::vector<Block*>& blocks, const MpiContex
     if (mpi.is_root()) {
         spdlog::info(">>> Flow Field Initialized (nstart=0).");
     }
+}
+
+// =========================================================================
+// 核心函数：init_nstart1 (Restart 读取初始化)
+// 文件格式对应 output_restart: 
+// Header: step(int), nblocks(int)
+// Body: [Block 0 Data][Block 1 Data]...
+// Block Data: [r...][u...][v...][w...][p...][t...] (纯物理网格)
+// =========================================================================
+void SimulationLoader::init_nstart1(std::vector<Block*>& blocks, const MpiContext& mpi) {
+    int rank = mpi.get_rank();
+    int nblocks = blocks.size();
+
+    std::string filename = "restart_flow.dat"; 
+    
+    int step_read = 0;
+    int nblocks_read = 0;
+    
+    std::ifstream in;
+
+    // 1. Master 打开文件并读取头部
+    if (rank == 0) {
+        in.open(filename, std::ios::binary | std::ios::in);
+        if (!in.is_open()) {
+            spdlog::error("Failed to open restart file: {}", filename);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+
+        // 读取 Header
+        in.read(reinterpret_cast<char*>(&step_read), sizeof(int));
+        in.read(reinterpret_cast<char*>(&nblocks_read), sizeof(int));
+
+        spdlog::info(">>> Reading Restart File: {}", filename);
+        spdlog::info("    Restart Step: {}, Blocks in File: {}", step_read, nblocks_read);
+
+        if (nblocks_read != nblocks) {
+            spdlog::error("Mismatch nblocks! Solver: {}, File: {}", nblocks, nblocks_read);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+
+    // 2. 广播 Step 信息 (以便所有进程同步时间步，可选)
+    MPI_Bcast(&step_read, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    
+    // 如果 GlobalData 有字段存储当前步数，可以在这里更新
+    // GlobalData::getInstance().current_step = step_read; 
+
+    // 3. 逐块读取并分发
+    for (int nb = 0; nb < nblocks; ++nb) {
+        // 因为 blocks 在所有进程中按顺序存储且包含 owner 信息，所以可以直接索引
+        // 注意：Slave 进程中的 blocks[nb] 可能为 nullptr (如果是 Ghost Block 模式)，
+        // 但根据 SimulationLoader::distribute_grid 的逻辑，
+        // 所有进程都持有完整的 blocks 列表（虽然非本地块内容为空，但 owner_rank 是正确的）。
+        // 建议重新确认 distribute_grid 是否在所有进程都创建了 Block 指针 shell。
+        // 根据之前的代码，blocks.resize(nblocks, nullptr) 且只 new 了自己的块。
+        // 因此我们不能直接访问 blocks[nb]->owner_rank，除非我们有元数据。
+        // 幸好 distribute_grid 里广播了 metas。
+        // 为了安全，我们最好重新广播一次 owner 或者假设 blocks 结构一致。
+        
+        // 更稳妥的方式：Rank 0 知道所有 owner (它持有完整的 blocks 列表或者有办法知道)
+        // 在 distribute_grid 中，Rank 0 有所有 Block。Slave 只有自己的。
+        // 所以 Rank 0 负责查 Owner。
+        
+        int owner = -1;
+        int ni = 0, nj = 0, nk = 0, ng = 0;
+
+        // 获取 Block 元数据
+        if (rank == 0) {
+            Block* b = blocks[nb]; // Rank 0 应该有所有 Block 对象 (或者至少知道 Meta)
+            // 根据 SimulationLoader::load，Rank 0 读取了所有 Grid，所以它有所有 Block 的指针
+            owner = b->owner_rank;
+            ni = b->ni;
+            nj = b->nj;
+            nk = b->nk;
+            ng = b->ng;
+        }
+
+        // 广播元数据 (Rank 0 -> All)
+        // 这样 Rank X 即使 blocks[nb] 为空也能知道是不是自己的
+        int meta[5]; // owner, ni, nj, nk, ng
+        if (rank == 0) {
+            meta[0] = owner; meta[1] = ni; meta[2] = nj; meta[3] = nk; meta[4] = ng;
+        }
+        MPI_Bcast(meta, 5, MPI_INT, 0, MPI_COMM_WORLD);
+
+        owner = meta[0];
+        ni = meta[1]; nj = meta[2]; nk = meta[3]; ng = meta[4];
+
+        size_t num_cells = (size_t)ni * nj * nk;
+        int n_vars = 6; // r, u, v, w, p, t
+
+        std::vector<double> buffer;
+
+        // --- Rank 0 读取 ---
+        if (rank == 0) {
+            buffer.resize(num_cells * n_vars);
+            in.read(reinterpret_cast<char*>(buffer.data()), buffer.size() * sizeof(double));
+            
+            // 如果文件结束或读取失败
+            if (!in) {
+                spdlog::error("Error reading data for block {}", nb);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+        }
+
+        // --- 数据分发 (Dispatch) ---
+        if (rank == 0) {
+            if (owner == 0) {
+                // 本地：直接解包
+                unpack_block_data(blocks[nb], buffer);
+            } else {
+                // 远程：发送
+                MPI_Send(buffer.data(), buffer.size(), MPI_DOUBLE, owner, nb, MPI_COMM_WORLD);
+            }
+        } else {
+            if (rank == owner) {
+                // 接收
+                buffer.resize(num_cells * n_vars);
+                MPI_Recv(buffer.data(), buffer.size(), MPI_DOUBLE, 0, nb, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                // 解包
+                unpack_block_data(blocks[nb], buffer);
+            }
+        }
+    }
+
+    if (rank == 0) {
+        in.close();
+        spdlog::info("    Restart file loaded successfully.");
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+}
+
+// =========================================================================
+// 辅助函数：解包数据到 Block (需添加到类定义中)
+// =========================================================================
+void SimulationLoader::unpack_block_data(Block* b, const std::vector<double>& buffer) {
+    if (!b) return;
+
+    int ni = b->ni;
+    int nj = b->nj;
+    int nk = b->nk;
+    int ng = b->ng;
+
+    size_t idx = 0;
+
+    // 辅助 Lambda: 解包单个变量
+    auto unpack_var = [&](HyresArray<double>& var) {
+        for (int k = 0; k < nk; ++k) {
+            for (int j = 0; j < nj; ++j) {
+                for (int i = 0; i < ni; ++i) {
+                    var(i + ng, j + ng, k + ng) = buffer[idx++];
+                }
+            }
+        }
+    };
+
+    // 必须严格按照 output_restart 的打包顺序解包
+    unpack_var(b->r);
+    unpack_var(b->u);
+    unpack_var(b->v);
+    unpack_var(b->w);
+    unpack_var(b->p);
+    unpack_var(b->t);
 }
 
 // =========================================================================
